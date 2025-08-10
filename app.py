@@ -1,13 +1,29 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy.orm import Session
-from utils.database import get_db
+from utils.database import get_db, init_db
 from utils.auth import get_user_by_username, verify_password
-from pages.ordenes import show_ordenes_page
-from pages.inventario import show_inventario_page
-# Usamos session_state para mantener el estado del usuario (logueado o no)
+from modules.ordenes import show_ordenes_page
+from modules.inventario import show_inventario_page
+from modules.informes import show_reports_page
+
+# --- Inicialización de variables de session_state (TOP-LEVEL en app.py) ---
+# Se inicializan aquí para asegurar que estén presentes desde el inicio de la aplicación
+if 'db_initialized' not in st.session_state:
+    init_db()
+    st.session_state['db_initialized'] = True
+    print("Base de datos y usuario admin inicializados (primera carga).")
+
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
+
+# Inicialización de variables para la selección de ubicación jerárquica
+if 'hierarchy_selection' not in st.session_state:
+    st.session_state.hierarchy_selection = {}
+if 'final_selected_activo_id' not in st.session_state:
+    st.session_state.final_selected_activo_id = None
+# --- FIN Inicialización de variables de session_state ---
+
 
 def show_login_page():
     st.title("Sistema de Gestión")
@@ -17,9 +33,7 @@ def show_login_page():
     password = st.text_input("Contraseña", type="password")
 
     if st.button("Iniciar Sesión"):
-        # Obtiene la sesión de la base de datos de forma explícita
-        db = next(get_db())
-
+        db: Session = next(get_db())
         try:
             user = get_user_by_username(db, username)
             if user and verify_password(password, user.password_hash):
@@ -32,13 +46,13 @@ def show_login_page():
             else:
                 st.error("Usuario o contraseña incorrectos.")
         finally:
-            # Asegúrate de cerrar la sesión de la base de datos
             db.close()
 
 def show_main_app():
-    st.sidebar.title(f"Bienvenido, {st.session_state['username']}")
+    st.sidebar.title("Menú")
+    st.sidebar.write(f"Bienvenido, {st.session_state['username']}")
     st.sidebar.write(f"Rol: {st.session_state['user_role']}")
-    
+
     page = st.sidebar.radio("Navegación", ["Panel de Control", "Órdenes de Trabajo", "Inventario", "Informes"])
 
     if st.sidebar.button("Cerrar Sesión"):
@@ -53,11 +67,8 @@ def show_main_app():
     elif page == "Inventario":
         show_inventario_page()
     elif page == "Informes":
-        st.title("📊 Informes y Estadísticas")
-        st.write("Esta sección aún no está implementada.")
+        show_reports_page()
 
-# Lógica principal de la aplicación
-# Si el usuario no está autenticado, muestra la página de login
 if not st.session_state['authenticated']:
     show_login_page()
 else:

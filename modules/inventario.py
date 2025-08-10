@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from utils.database import get_db
 from utils.inventario_db import create_item, get_items, update_item_quantity
 import pandas as pd
-
+from models import Producto, Inventario
 def show_inventario_page():
     st.title("📦 Gestión de Inventario")
 

@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from .models import Inventario
+from models import Inventario, Producto
+from utils.database import get_db
 from datetime import datetime
 
 def create_item(db: Session, nombre: str, descripcion: str, cantidad: int, ubicacion: str, precio_unidad: float):

@@ -1,28 +1,176 @@
-from sqlalchemy.orm import Session
-from .models import OrdenTrabajo
-from datetime import datetime
+# utils/ordenes_trabajo.py
 
-def create_orden_trabajo(db: Session, titulo: str, descripcion: str, fecha_limite: datetime):
-    """Crea una nueva orden de trabajo."""
-    db_orden = OrdenTrabajo(
+from sqlalchemy.orm import Session
+from sqlalchemy import func, inspect
+from datetime import datetime
+from models import OrdenTrabajo, Usuario, Activo, ItemOrden, Producto
+from utils.database import get_db
+
+# Constante para el número inicial de órdenes
+INITIAL_ORDER_NUMBER = 10000
+
+def get_next_order_number(db: Session) -> str:
+    """
+    Genera el siguiente número de orden de trabajo.
+    Busca el último número de orden y le suma 1. Si no hay órdenes, usa INITIAL_ORDER_NUMBER.
+    """
+    last_order = db.query(OrdenTrabajo).order_by(OrdenTrabajo.id.desc()).first()
+    if last_order and last_order.numero_orden.isdigit():
+        next_num = int(last_order.numero_orden) + 1
+    else:
+        next_num = INITIAL_ORDER_NUMBER
+    return str(next_num)
+
+def create_orden_trabajo(
+    db: Session,
+    titulo: str,
+    descripcion: str,
+    estado: str,
+    criticidad: str,
+    fecha_limite: datetime,
+    ubicacion_id: int,
+    generado_por_id: int,
+    asignado_a_id: int = None,
+    items_orden: list = None
+):
+    """
+    Crea una nueva orden de trabajo con todos los campos.
+    """
+    numero_orden = get_next_order_number(db)
+
+    new_orden = OrdenTrabajo(
+        numero_orden=numero_orden,
         titulo=titulo,
         descripcion=descripcion,
-        fecha_limite=fecha_limite
+        estado=estado,
+        criticidad=criticidad,
+        fecha_limite=fecha_limite,
+        ubicacion_id=ubicacion_id,
+        generado_por_id=generado_por_id,
+        asignado_a_id=asignado_a_id,
+        fecha_creacion=datetime.utcnow()
     )
-    db.add(db_orden)
+    
+    db.add(new_orden)
+    db.flush() 
+
+    if items_orden:
+        for item_data in items_orden:
+            producto = db.query(Producto).filter(Producto.id == item_data["producto_id"]).first()
+            if not producto:
+                raise ValueError(f"Producto con ID {item_data['producto_id']} no encontrado.")
+            
+            item = ItemOrden(
+                orden_id=new_orden.id,
+                producto_id=item_data["producto_id"],
+                nombre_item=item_data.get("nombre_item", producto.nombre),
+                cantidad=item_data["cantidad"],
+                precio_unitario_actual=producto.precio_unitario
+            )
+            db.add(item)
+    
     db.commit()
-    db.refresh(db_orden)
-    return db_orden
+    db.refresh(new_orden)
+    return new_orden
 
-def get_ordenes_trabajo(db: Session):
-    """Obtiene todas las órdenes de trabajo."""
-    return db.query(OrdenTrabajo).all()
+def get_ordenes_trabajo(db: Session, estado: str = None):
+    """
+    Obtiene todas las órdenes de trabajo, opcionalmente filtradas por estado.
+    """
+    query = db.query(OrdenTrabajo).order_by(OrdenTrabajo.fecha_creacion.desc())
+    if estado:
+        query = query.filter(OrdenTrabajo.estado == estado)
+    return query.all()
 
-def update_orden_estado(db: Session, orden_id: int, nuevo_estado: str):
-    """Actualiza el estado de una orden de trabajo."""
+def update_orden_estado(db: Session, orden_id: int, new_estado: str):
+    """
+    Actualiza el estado de una orden de trabajo.
+    """
     orden = db.query(OrdenTrabajo).filter(OrdenTrabajo.id == orden_id).first()
     if orden:
-        orden.estado = nuevo_estado
+        orden.estado = new_estado
+        orden.fecha_actualizacion = datetime.utcnow()
         db.commit()
         db.refresh(orden)
-    return orden
+        return orden
+    return None
+
+def get_usuarios_por_rol(db: Session, rol: str = None):
+    """
+    Obtiene usuarios, opcionalmente filtrados por rol.
+    """
+    query = db.query(Usuario).filter(Usuario.is_activo == True)
+    if rol:
+        query = query.filter(Usuario.rol == rol)
+    return query.all()
+
+def assign_orden_to_user(db: Session, orden_id: int, user_id: int):
+    """
+    Asigna una orden de trabajo a un usuario.
+    """
+    orden = db.query(OrdenTrabajo).filter(OrdenTrabajo.id == orden_id).first()
+    if orden:
+        orden.asignado_a_id = user_id
+        db.commit()
+        db.refresh(orden)
+        return orden
+    return None
+
+# Funciones para la jerarquía de Activos
+def create_activo(db: Session, nombre: str, tipo: str, descripcion: str = None, parent_id: int = None):
+    """
+    Crea un nuevo activo (ubicación) en la base de datos.
+    """
+    new_activo = Activo(nombre=nombre, tipo=tipo, descripcion=descripcion, parent_id=parent_id)
+    db.add(new_activo)
+    db.commit()
+    db.refresh(new_activo)
+    return new_activo
+
+def get_activos(db: Session, parent_id: int = None):
+    """
+    Obtiene activos, opcionalmente filtrados por su padre.
+    """
+    query = db.query(Activo)
+    if parent_id is not None:
+        query = query.filter(Activo.parent_id == parent_id)
+    else:
+        # Si parent_id es None, obtener los activos de nivel superior (raíz)
+        query = query.filter(Activo.parent_id == None) 
+    return query.order_by(Activo.nombre).all() # Ordenar por nombre para mejor visualización
+
+def get_activo_by_id(db: Session, activo_id: int):
+    """
+    Obtiene un activo por su ID.
+    """
+    return db.query(Activo).filter(Activo.id == activo_id).first()
+
+def get_activo_full_path(db: Session, activo_id: int):
+    """
+    Obtiene la ruta completa de un activo (ej: Planta A > Almacén 1 > Rack 2).
+    """
+    path_parts = []
+    current_activo = get_activo_by_id(db, activo_id)
+    while current_activo:
+        path_parts.insert(0, current_activo.nombre)
+        current_activo = current_activo.parent # Acceder a la relación 'parent'
+    return " > ".join(path_parts)
+
+def find_activos_by_name_or_tag(db: Session, query_string: str, parent_id: int = None, activo_type: str = None) -> list[Activo]:
+    """
+    Busca activos por su nombre o tag (coincidencia parcial e insensible a mayúsculas/minúsculas).
+    Opcionalmente, puede filtrar por parent_id y/o tipo de activo.
+    Retorna una lista de Activo objects.
+    """
+    if not query_string:
+        return []
+    
+    query = db.query(Activo).filter(Activo.nombre.ilike(f'%{query_string}%'))
+    
+    if parent_id is not None:
+        query = query.filter(Activo.parent_id == parent_id)
+    
+    if activo_type:
+        query = query.filter(Activo.tipo == activo_type)
+
+    return query.limit(20).all() # Limita resultados para no sobrecargar
