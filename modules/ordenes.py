@@ -8,7 +8,7 @@ from utils.ordenes_trabajo import (
     create_orden_trabajo, get_ordenes_trabajo, update_orden_estado,
     get_usuarios_por_rol, assign_orden_to_user, get_next_order_number,
     get_activos, get_activo_full_path, get_activo_by_id,
-    find_activos_by_name_or_tag # Mantenemos la importación por si se usa en otro lugar o para futuras expansiones
+    find_activos_by_name_or_tag
 )
 from models import Usuario, Activo, OrdenTrabajo, ItemOrden, Producto
 
@@ -40,11 +40,18 @@ def show_ordenes_page():
 
             st.subheader("Seleccionar Ubicación del Activo")
 
-            # --- Eliminar inicialización de variables de estado del buscador de mineros aquí ---
-            # if 'minero_search_query' not in st.session_state: st.session_state.minero_search_query = ""
-            # if 'minero_search_results' not in st.session_state: st.session_state.minero_search_results = []
-            # if 'selected_minero_id' not in st.session_state: st.session_state.selected_minero_id = None
-            # if 'minero_search_active' not in st.session_state: st.session_state.minero_search_active = False
+            # Resetear variables de estado si cambian de contexto
+            # Esto es necesario para evitar que la selección de Inventario afecte a Ordenes de Trabajo y viceversa
+            if 'minero_search_query' in st.session_state: del st.session_state.minero_search_query
+            if 'minero_search_results' in st.session_state: del st.session_state.minero_search_results
+            if 'selected_minero_id' in st.session_state: del st.session_state.selected_minero_id
+            if 'minero_search_active' in st.session_state: del st.session_state.minero_search_active
+
+            # Asegurar que las variables de session_state para esta página estén inicializadas
+            if 'hierarchy_selection' not in st.session_state:
+                st.session_state.hierarchy_selection = {}
+            if 'final_selected_activo_id' not in st.session_state:
+                st.session_state.final_selected_activo_id = None
 
             current_parent_id_for_loop = None # Rastrea el ID del padre para el nivel actual del selector
             
@@ -53,10 +60,10 @@ def show_ordenes_page():
             while True:
                 level_key = f'level_{level}'
                 
-                current_level_activos = get_activos(db, parent_id=current_parent_id_for_loop)
+                # <--- CAMBIO AQUÍ: Pasar 'ordenes' al get_activos
+                current_level_activos = get_activos(db, parent_id=current_parent_id_for_loop, for_module='ordenes')
 
                 if not current_level_activos:
-                    # Si no hay más hijos, la selección final es el último current_parent_id_for_loop
                     st.session_state.final_selected_activo_id = current_parent_id_for_loop
                     break
 
@@ -86,8 +93,8 @@ def show_ordenes_page():
                     for k in keys_to_delete:
                         del st.session_state.hierarchy_selection[k]
                     
-                    st.session_state.final_selected_activo_id = actual_selected_id # Actualizar el ID final
-                    st.rerun() 
+                    st.session_state.final_selected_activo_id = actual_selected_id
+                    st.rerun()
 
                 if actual_selected_id is None:
                     st.session_state.final_selected_activo_id = None
@@ -98,20 +105,16 @@ def show_ordenes_page():
             
             # --- FIN LÓGICA DE SELECCIÓN DE UBICACIÓN ---
 
-            # El ID final seleccionado proviene de st.session_state.final_selected_activo_id
             selected_activo_id = st.session_state.final_selected_activo_id
 
-            # Mostrar la ruta completa y el activo final si aplica
             if selected_activo_id:
                 activo_seleccionado_obj = get_activo_by_id(db, selected_activo_id)
                 if activo_seleccionado_obj:
-                    # Si el activo es un "Minero", separamos la ubicación de la ruta
-                    if activo_seleccionado_obj.tipo == "Minero":
+                    if activo_seleccionado_obj.tipo == "Equipo":
                         ubicacion_path = get_activo_full_path(db, activo_seleccionado_obj.parent_id) if activo_seleccionado_obj.parent_id else "N/A"
                         st.write(f"Ubicación: **{ubicacion_path}**")
                         st.write(f"Activo Final: **{activo_seleccionado_obj.nombre}**")
                     else:
-                        # Si es un nivel superior, toda la ruta es la ubicación
                         full_path_display = get_activo_full_path(db, selected_activo_id)
                         st.write(f"Ubicación: **{full_path_display}**")
                         st.write("Activo Final: N/A (Ubicación de nivel superior seleccionada)")
@@ -144,14 +147,8 @@ def show_ordenes_page():
                         )
                         st.success(f"Orden de Trabajo '{nueva_orden.numero_orden}' creada con éxito!")
                         
-                        # Resetear la selección jerárquica y el formulario después de crear
                         st.session_state.hierarchy_selection = {}
                         st.session_state.final_selected_activo_id = None
-                        # Eliminar reseteo de variables de búsqueda de mineros
-                        # st.session_state.minero_search_query = ""
-                        # st.session_state.minero_search_results = []
-                        # st.session_state.selected_minero_id = None
-                        # st.session_state.minero_search_active = False
                         st.rerun() 
                     except Exception as e:
                         st.error(f"Error al crear la orden de trabajo: {e}")
@@ -174,7 +171,7 @@ def show_ordenes_page():
                     
                     if orden.ubicacion_id:
                         activo_orden = get_activo_by_id(db, orden.ubicacion_id)
-                        if activo_orden and activo_orden.tipo == "Minero":
+                        if activo_orden and activo_orden.tipo == "Equipo":
                             ubicacion_path = get_activo_full_path(db, activo_orden.parent_id) if activo_orden.parent_id else "N/A"
                             st.write(f"  Ubicación: **{ubicacion_path}**")
                             st.write(f"  Activo Final: **{activo_orden.nombre}**")

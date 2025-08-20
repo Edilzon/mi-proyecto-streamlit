@@ -127,17 +127,29 @@ def create_activo(db: Session, nombre: str, tipo: str, descripcion: str = None, 
     db.refresh(new_activo)
     return new_activo
 
-def get_activos(db: Session, parent_id: int = None):
+def get_activos(db: Session, parent_id: int = None, for_module: str = None):
     """
-    Obtiene activos, opcionalmente filtrados por su padre.
+    Obtiene activos, opcionalmente filtrados por su padre y por el módulo que los solicita.
+    - for_module: 'ordenes' para excluir ubicaciones de inventario de nivel superior.
+                  'inventario' para incluir solo ubicaciones de inventario de nivel superior.
     """
     query = db.query(Activo)
+
     if parent_id is not None:
         query = query.filter(Activo.parent_id == parent_id)
     else:
-        # Si parent_id es None, obtener los activos de nivel superior (raíz)
         query = query.filter(Activo.parent_id == None) 
-    return query.order_by(Activo.nombre).all() # Ordenar por nombre para mejor visualización
+        
+        if for_module == 'ordenes':
+            query = query.filter(
+                Activo.tipo.notin_(['Centro de Almacenamiento', 'Centro de Pruebas', 'Estante']) # Excluir estantes también
+            )
+        elif for_module == 'inventario':
+            query = query.filter(
+                Activo.tipo.in_(['Centro de Almacenamiento', 'Centro de Pruebas'])
+            )
+            
+    return query.order_by(Activo.nombre).all()
 
 def get_activo_by_id(db: Session, activo_id: int):
     """
@@ -153,7 +165,7 @@ def get_activo_full_path(db: Session, activo_id: int):
     current_activo = get_activo_by_id(db, activo_id)
     while current_activo:
         path_parts.insert(0, current_activo.nombre)
-        current_activo = current_activo.parent # Acceder a la relación 'parent'
+        current_activo = current_activo.parent
     return " > ".join(path_parts)
 
 def find_activos_by_name_or_tag(db: Session, query_string: str, parent_id: int = None, activo_type: str = None) -> list[Activo]:
@@ -173,4 +185,25 @@ def find_activos_by_name_or_tag(db: Session, query_string: str, parent_id: int =
     if activo_type:
         query = query.filter(Activo.tipo == activo_type)
 
-    return query.limit(20).all() # Limita resultados para no sobrecargar
+    return query.limit(20).all()
+
+def get_all_descendant_activo_ids(db: Session, parent_id: int) -> list[int]:
+    """
+    Obtiene una lista de todos los IDs de activos descendientes (incluyendo el parent_id)
+    dada una ubicación padre.
+    """
+    if parent_id is None:
+        return []
+
+    descendants_ids = set()
+    queue = [parent_id] # Usamos una cola para búsqueda en anchura
+
+    while queue:
+        current_id = queue.pop(0)
+        if current_id not in descendants_ids:
+            descendants_ids.add(current_id)
+            # Encuentra hijos directos
+            children = db.query(Activo.id).filter(Activo.parent_id == current_id).all()
+            for child_id_tuple in children:
+                queue.append(child_id_tuple[0])
+    return list(descendants_ids)
